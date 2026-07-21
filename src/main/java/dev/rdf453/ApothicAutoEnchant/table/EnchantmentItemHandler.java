@@ -8,6 +8,17 @@ import net.neoforged.neoforge.transfer.ResourceHandler;
 import net.neoforged.neoforge.transfer.item.ItemResource;
 import net.neoforged.neoforge.transfer.transaction.TransactionContext;
 
+/*
+ * 설계 메모 (2026-07-21 기준)
+ * - 현재 상태:
+ *   1) 2슬롯(연료/책) ResourceHandler와 기본 insert/extract/유효성 검증이 구현되어 있다.
+ *   2) AttachmentType 선언은 되어 있으나 블록엔티티 attach/저장 연동은 아직 확인되지 않았다.
+ * - 다음 작업:
+ *   1) 자동화 엔진에서 사용할 결과 슬롯/출력 정책 확장 여부를 결정한다.
+ *   2) 실제 블록엔티티 상태 저장(setChanged/NBT) 경로와 핸들러 변경 이벤트를 연결한다.
+ * - 리스크/주의:
+ *   1) 트랜잭션 컨텍스트를 활용한 롤백 처리 미구현으로 복합 이체 시 정합성 검증이 필요하다.
+ */
 public class EnchantmentItemHandler implements ResourceHandler<ItemResource> {
 
     // 테이블의 인벤토리 역할을 하는 핸들러로, 슬롯 0은 연료, 슬롯 1은 책을 담당한다.

@@ -16,6 +16,18 @@ import java.util.List;
 // 플레이어가 직접 보지 않는 내부 버퍼 역할을 하며, 나중에 UI 입력칸으로 옮길 수 있도록
 // 인챈트 북을 임시로 보관하는 용도로 사용한다.
 @Mixin(EnchLibraryTile.class)
+/*
+ * 설계 메모 (2026-07-21 기준)
+ * - 현재 상태:
+ *   1) EnchLibraryTile에 인챈트북 전용 버퍼(ResourceHandler 432칸)와 삽입/전체추출 API가 구현되어 있다.
+ *   2) 슬롯 검증(인챈트북 전용)과 기본 insert/extract 동작은 동작 가능한 형태다.
+ * - 다음 작업:
+ *   1) 버퍼 상태를 월드 저장과 연결할 NBT 직렬화/역직렬화 경로를 추가한다.
+ *   2) null TransactionContext 경로를 정리하고 트랜잭션 롤백/동기화 정책을 확정한다.
+ *   3) 전체추출 외에 요청 수량 기반 부분 추출 API를 추가한다.
+ * - 리스크/주의:
+ *   1) insert가 기존 스택 병합 대신 새 스택 대입 중심이라 스택 유지 정책 점검이 필요하다.
+ */
 public abstract class LibraryTileMixin implements LibraryTransfer {
 
     // 실제 버퍼 저장소: 432개의 슬롯을 가진 내부 배열이다.
