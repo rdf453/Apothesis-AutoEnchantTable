@@ -6,7 +6,6 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.neoforged.neoforge.transfer.ResourceHandler;
 import net.neoforged.neoforge.transfer.item.ItemResource;
-import net.neoforged.neoforge.transfer.transaction.TransactionContext;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 
@@ -19,127 +18,125 @@ import java.util.List;
 /*
  * 설계 메모 (2026-07-21 기준)
  * - 현재 상태:
- *   1) EnchLibraryTile에 인챈트북 전용 버퍼(ResourceHandler 432칸)와 삽입/전체추출 API가 구현되어 있다.
- *   2) 슬롯 검증(인챈트북 전용)과 기본 insert/extract 동작은 동작 가능한 형태다.
+ *   1) EnchLibraryTile에 인챈트북 전용 내부 버퍼(ItemStack 432칸)와 삽입/전체추출/입력 플러시 API가 구현되어 있다.
+ *   2) 슬롯 검증(인챈트북 전용)과 기본 insert/extract 병합 동작은 동작 가능한 형태다.
  * - 다음 작업:
  *   1) 버퍼 상태를 월드 저장과 연결할 NBT 직렬화/역직렬화 경로를 추가한다.
- *   2) null TransactionContext 경로를 정리하고 트랜잭션 롤백/동기화 정책을 확정한다.
- *   3) 전체추출 외에 요청 수량 기반 부분 추출 API를 추가한다.
+ *   2) 도서관 좌표 캐시와 연동해 상호작용 시점에만 flush가 일어나도록 정리한다.
+ *   3) 전체추출 외에 요청 수량 기반 부분 추출 API가 필요하면 분리한다.
  * - 리스크/주의:
  *   1) insert가 기존 스택 병합 대신 새 스택 대입 중심이라 스택 유지 정책 점검이 필요하다.
+ *   2) flushBufferToInput은 입력핸들러가 null이거나 변경되면 반환값 기준으로 실패 처리가 필요하다.
  */
 public abstract class LibraryTileMixin implements LibraryTransfer {
-
-    // 실제 버퍼 저장소: 432개의 슬롯을 가진 내부 배열이다.
     @Unique
-    private final ResourceHandler<ItemResource> bufferHandler = new ResourceHandler<>() {
-        private final ItemStack[] slots = new ItemStack[432];
-
-        @Override
-        public int size() {
-            // 버퍼가 관리하는 슬롯 수를 반환한다.
-            return slots.length;
-        }
-
-        @Override
-        public ItemResource getResource(int slot) {
-            // 지정한 슬롯의 현재 아이템을 Resource 형태로 꺼낸다.
-            ItemStack stack = slots[slot];
-            return stack.isEmpty() ? ItemResource.EMPTY : ItemResource.of(stack);
-        }
-
-        @Override
-        public long getAmountAsLong(int slot) {
-            return slot >= 0 && slot < slots.length ? slots[slot].getCount() : 0;
-        }
-
-        @Override
-        public long getCapacityAsLong(int slot, ItemResource resource) {
-            // 인챈트 북만 허용하므로 슬롯당 최대 용량은 64로 둔다.
-            return isValid(slot, resource) ? 64 : 0;
-        }
-
-        @Override
-        public boolean isValid(int slot, ItemResource resource) {
-            // 유효한 슬롯 번호이고, 인챈트 북만 저장할 수 있도록 제한한다.
-            return slot >= 0 && slot < slots.length && resource != null && !resource.isEmpty() && resource.is(Items.ENCHANTED_BOOK);
-        }
-
-        @Override
-        public int insert(int slot, ItemResource resource, int amount, TransactionContext context) {
-            // 버퍼에 아이템을 넣을 때, 유효한 슬롯이고 여유 공간이 있으면 넣는다.
-            if (!isValid(slot, resource) || amount <= 0) {
-                return 0;
-            }
-
-            ItemStack current = slots[slot];
-            int capacity = 64 - current.getCount();
-            int toInsert = Math.min(amount, capacity);
-            if (toInsert <= 0) {
-                return 0;
-            }
-
-            slots[slot] = resource.toStack(toInsert);
-            return toInsert;
-        }
-
-        @Override
-        public int extract(int slot, ItemResource resource, int amount, TransactionContext context) {
-            // 버퍼에서 아이템을 꺼낼 때, 요청한 슬롯과 아이템이 일치하면 제거한다.
-            if (slot < 0 || slot >= slots.length || amount <= 0 || resource == null || resource.isEmpty()) {
-                return 0;
-            }
-
-            ItemStack current = slots[slot];
-            if (current.isEmpty() || !resource.matches(current)) {
-                return 0;
-            }
-
-            int toExtract = Math.min(amount, current.getCount());
-            slots[slot] = current.copyWithCount(current.getCount() - toExtract);
-            if (slots[slot].getCount() <= 0) {
-                slots[slot] = ItemStack.EMPTY;
-            }
-            return toExtract;
-        }
-    };
+    private static final int AUTO_ENCH_BUFFER_SIZE = 432;
 
     @Unique
-    public boolean AutoEnch$insertArray(ItemStack stack) {
-        // 외부에서 인챈트 북을 넘겨받으면, 빈 슬롯에 하나씩 저장한다.
-        if (stack == null || stack.isEmpty() || !stack.is(Items.ENCHANTED_BOOK)) {
-            return false;
-        }
+    private static final int SLOT_STACK_LIMIT = 64;
 
-        for (int i = 0; i < bufferHandler.size(); i++) {
-            if (bufferHandler.getAmountAsLong(i) < 64) {
-                bufferHandler.insert(i, ItemResource.of(stack), stack.getCount(), null);
-                return true;
-            }
-        }
+    // 알렉산드리아 도서관 인스턴스별 임시 버퍼.
+    // 목적: 플레이어 상호작용 시 입력 슬롯으로 한번에 이체하기 전까지 보관.
+    @Unique
+    private final ItemStack[] autoEnchBuffer = createEmptyBuffer();
 
-        return false;
+    @Unique
+    private static ItemStack[] createEmptyBuffer() {
+        ItemStack[] buffer = new ItemStack[AUTO_ENCH_BUFFER_SIZE];
+        for (int i = 0; i < buffer.length; i++) {
+            buffer[i] = ItemStack.EMPTY;
+        }
+        return buffer;
     }
 
     @Unique
-    public List<ItemStack> AutoEnch$extractArray() {
+    private static boolean isInsertableBook(ItemStack stack) {
+        return stack != null && !stack.isEmpty() && stack.is(Items.ENCHANTED_BOOK);
+    }
+
+    @Unique
+    public boolean AutoEnch_insertList(ItemStack stack) {
+        // 외부에서 받은 인챈트 북을 버퍼에 누적한다.
+        if (!isInsertableBook(stack)) {
+            return false;
+        }
+
+        int remaining = stack.getCount();
+
+        // 1차: 같은 아이템 스택 병합.
+        for (int i = 0; i < autoEnchBuffer.length && remaining > 0; i++) {
+            ItemStack current = autoEnchBuffer[i];
+            if (!current.isEmpty() && ItemStack.isSameItemSameComponents(current, stack) && current.getCount() < SLOT_STACK_LIMIT) {
+                int canMove = Math.min(remaining, SLOT_STACK_LIMIT - current.getCount());
+                autoEnchBuffer[i] = current.copyWithCount(current.getCount() + canMove);
+                remaining -= canMove;
+            }
+        }
+
+        // 2차: 빈 슬롯 채우기.
+        for (int i = 0; i < autoEnchBuffer.length && remaining > 0; i++) {
+            if (autoEnchBuffer[i].isEmpty()) {
+                int canMove = Math.min(remaining, SLOT_STACK_LIMIT);
+                autoEnchBuffer[i] = stack.copyWithCount(canMove);
+                remaining -= canMove;
+            }
+        }
+
+        return remaining < stack.getCount();
+    }
+
+    @Unique
+    public List<ItemStack> AutoEnch_extractList() {
         // 버퍼에 들어 있는 모든 인챈트 북을 하나씩 분리해서 반환한다.
         List<ItemStack> result = new ArrayList<>();
 
-        for (int i = 0; i < bufferHandler.size(); i++) {
-            if (bufferHandler.getAmountAsLong(i) > 0) {
-                ItemResource resource = bufferHandler.getResource(i);
-                if (!resource.isEmpty()) {
-                    int amount = (int) bufferHandler.getAmountAsLong(i);
-                    bufferHandler.extract(i, resource, amount, null);
-
-                    for (int j = 0; j < amount; j++) {
-                        result.add(resource.toStack(1));
-                    }
+        for (int i = 0; i < autoEnchBuffer.length; i++) {
+            ItemStack current = autoEnchBuffer[i];
+            if (!current.isEmpty()) {
+                int amount = current.getCount();
+                ItemStack single = current.copyWithCount(1);
+                for (int j = 0; j < amount; j++) {
+                    result.add(single.copy());
                 }
+                autoEnchBuffer[i] = ItemStack.EMPTY;
             }
         }
 
         return result;
+    }
+
+    @Override
+    @Unique
+    public int AutoEnch_flushBufferToInput() {
+        // 도서관 타일의 입력 핸들러에 버퍼 아이템을 가능한 만큼 밀어넣는다.
+        EnchLibraryTile self = (EnchLibraryTile) (Object) this;
+        ResourceHandler<ItemResource> inputHandler = self.getItemHandler(null);
+        if (inputHandler == null) {
+            return 0;
+        }
+
+        int movedTotal = 0;
+
+        for (int i = 0; i < autoEnchBuffer.length; i++) {
+            ItemStack buffered = autoEnchBuffer[i];
+            if (!isInsertableBook(buffered)) {
+                continue;
+            }
+
+            int remaining = buffered.getCount();
+            ItemResource resource = ItemResource.of(buffered);
+
+            for (int slot = 0; slot < inputHandler.size() && remaining > 0; slot++) {
+                int inserted = inputHandler.insert(slot, resource, remaining, null);
+                if (inserted > 0) {
+                    movedTotal += inserted;
+                    remaining -= inserted;
+                }
+            }
+
+            autoEnchBuffer[i] = remaining <= 0 ? ItemStack.EMPTY : buffered.copyWithCount(remaining);
+        }
+
+        return movedTotal;
     }
 }

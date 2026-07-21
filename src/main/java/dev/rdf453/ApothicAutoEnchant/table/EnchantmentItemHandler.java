@@ -8,18 +8,31 @@ import net.neoforged.neoforge.transfer.ResourceHandler;
 import net.neoforged.neoforge.transfer.item.ItemResource;
 import net.neoforged.neoforge.transfer.transaction.TransactionContext;
 
+import java.util.Arrays;
+
 /*
  * 설계 메모 (2026-07-21 기준)
  * - 현재 상태:
  *   1) 2슬롯(연료/책) ResourceHandler와 기본 insert/extract/유효성 검증이 구현되어 있다.
- *   2) AttachmentType 선언은 되어 있으나 블록엔티티 attach/저장 연동은 아직 확인되지 않았다.
+ *   2) 라이브러리 버퍼 팩토리(createLibraryBuffer)까지 포함해 테이블/도서관 양쪽에서 재사용 가능한 상태다.
  * - 다음 작업:
  *   1) 자동화 엔진에서 사용할 결과 슬롯/출력 정책 확장 여부를 결정한다.
  *   2) 실제 블록엔티티 상태 저장(setChanged/NBT) 경로와 핸들러 변경 이벤트를 연결한다.
  * - 리스크/주의:
  *   1) 트랜잭션 컨텍스트를 활용한 롤백 처리 미구현으로 복합 이체 시 정합성 검증이 필요하다.
+ *   2) 도서관 버퍼는 책만 허용하고 기본 테이블은 책+인챈트 가능 아이템을 허용하는 정책 차이를 유지해야 한다.
  */
 public class EnchantmentItemHandler implements ResourceHandler<ItemResource> {
+
+    @FunctionalInterface
+    public interface SlotValidator {
+        boolean isValid(int slot, ItemResource resource);
+    }
+
+    @FunctionalInterface
+    public interface SlotCapacityResolver {
+        int getCapacity(int slot, ItemResource resource);
+    }
 
     // 테이블의 인벤토리 역할을 하는 핸들러로, 슬롯 0은 연료, 슬롯 1은 책을 담당한다.
     public static final AttachmentType<EnchantmentItemHandler> TYPE =
@@ -27,11 +40,35 @@ public class EnchantmentItemHandler implements ResourceHandler<ItemResource> {
 
     // 각 슬롯의 실제 아이템 상태를 저장한다.
     private final ItemStack[] stacks;
+    private final SlotValidator slotValidator;
+    private final SlotCapacityResolver slotCapacityResolver;
 
     public EnchantmentItemHandler() {
-        this.stacks = new ItemStack[2];
-        this.stacks[0] = ItemStack.EMPTY;
-        this.stacks[1] = ItemStack.EMPTY;
+        this(
+                2,
+                (slot, resource) -> switch (slot) {
+                    case 0 -> resource.is(Tags.Items.ENCHANTING_FUELS);
+                    case 1 -> resource.is(Tags.Items.ENCHANTABLES) || resource.is(Items.ENCHANTED_BOOK);
+                    default -> false;
+                },
+                (slot, resource) -> slot == 1 ? 1 : Math.min(64, resource.getMaxStackSize())
+        );
+    }
+
+    public EnchantmentItemHandler(int slotCount, SlotValidator slotValidator, SlotCapacityResolver slotCapacityResolver) {
+        int safeSlotCount = Math.max(1, slotCount);
+        this.stacks = new ItemStack[safeSlotCount];
+        Arrays.fill(this.stacks, ItemStack.EMPTY);
+        this.slotValidator = slotValidator;
+        this.slotCapacityResolver = slotCapacityResolver;
+    }
+
+    public static EnchantmentItemHandler createLibraryBuffer(int slotCount) {
+        return new EnchantmentItemHandler(
+                slotCount,
+                (slot, resource) -> resource.is(Items.ENCHANTED_BOOK),
+                (slot, resource) -> 64
+        );
     }
 
     @Override
@@ -65,21 +102,16 @@ public class EnchantmentItemHandler implements ResourceHandler<ItemResource> {
         if (!isValid(slot, resource)) {
             return 0;
         }
-        return slot == 1 ? 1 : Math.min(64, resource.getMaxStackSize());
+        return Math.max(0, this.slotCapacityResolver.getCapacity(slot, resource));
     }
 
     @Override
     public boolean isValid(int slot, ItemResource resource) {
         // 각 슬롯이 허용하는 아이템 종류를 제한한다.
-        if (resource == null || resource.isEmpty()) {
+        if (slot < 0 || slot >= stacks.length || resource == null || resource.isEmpty()) {
             return false;
         }
-
-        return switch (slot) {
-            case 0 -> resource.is(Tags.Items.ENCHANTING_FUELS);
-            case 1 -> resource.is(Items.BOOK) || resource.is(Items.ENCHANTED_BOOK);
-            default -> false;
-        };
+        return this.slotValidator.isValid(slot, resource);
     }
 
     @Override
@@ -133,7 +165,7 @@ public class EnchantmentItemHandler implements ResourceHandler<ItemResource> {
     }
 
     public int getSlotLimit(int slot) {
-        // 책 슬롯은 한 권만 넣을 수 있고, 연료 슬롯은 기본적으로 64개까지 허용한다.
-        return slot == 1 ? 1 : 64;
+        // 기본 슬롯 제한은 64이며, 실제 허용량은 insert 시점 검증으로 확정한다.
+        return 64;
     }
 }
