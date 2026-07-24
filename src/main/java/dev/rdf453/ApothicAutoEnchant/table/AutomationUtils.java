@@ -60,7 +60,8 @@ public final class AutomationUtils {
 
     // 모든 레벨 주입
     public static void injectAllLv(TableBlockEntity tableBlockEntity, Player player) {
-        if (player.experienceLevel <= 0) return;
+        if (player.experienceLevel <= 0)
+            return;
         int needed = XpTransfer.getXpNeedPoint(player, 0);
 
         tableBlockEntity.xpTank -= needed;
@@ -70,10 +71,12 @@ public final class AutomationUtils {
 
     // 10레벨 회수
     public static void eject10Lv(TableBlockEntity tableBlockEntity, Player player) {
-        if (tableBlockEntity.xpTank < 0) return;
+        if (tableBlockEntity.xpTank < 0)
+            return;
         int needed = XpTransfer.getXpNeedPoint(player, player.experienceLevel + 10);
 
-        if (tableBlockEntity.xpTank < needed) return;
+        if (tableBlockEntity.xpTank < needed)
+            return;
         tableBlockEntity.xpTank -= needed;
         player.giveExperiencePoints(needed);
 
@@ -86,18 +89,21 @@ public final class AutomationUtils {
         tableBlockEntity.xpTank = 0;
         tableBlockEntity.setChanged();
     }
-    //결과물 복사
+
+    // 결과물 복사
     private static ItemStack copyResult(EnchantMenu em) {
-        return em.getSlot(0).getItem().copy();
+        return em.getSlot(1).getItem().copy();
     }
-    //슬롯 비우기
+
+    // 슬롯 비우기
     private static void clearSlot(EnchantMenu em) {
-        em.getSlot(0).set(ItemStack.EMPTY);
+        em.getSlot(1).set(ItemStack.EMPTY);
     }
-    //도서관으로 결과물 배출
+
+    // 도서관으로 결과물 배출
     public static void doTransfer(TableBlockEntity tableBlockEntity, EnchantMenu em) {
-        if (tableBlockEntity.libraryPos.isEmpty() || tableBlockEntity.tableLevel() == null) return;
-        
+        if (tableBlockEntity.libraryPos.isEmpty() || tableBlockEntity.tableLevel() == null)
+            return;
 
         BlockEntity blockEntity = tableBlockEntity.tableLevel().getBlockEntity(tableBlockEntity.libraryPos.get());
         if (blockEntity instanceof LibraryTransfer transfer) {
@@ -108,80 +114,133 @@ public final class AutomationUtils {
         }
     }
 
-    
-
-    //인첸트 연료 가져오기
+    // 인첸트 연료 가져오기
     public static void bringFuel(TableBlockEntity tableBlockEntity, EnchantMenu em) {
-        if (tableBlockEntity.chestPos.isEmpty() || tableBlockEntity.tableLevel() == null) return;
-
-
-        
+        if (tableBlockEntity.chestPos.isEmpty() || tableBlockEntity.tableLevel() == null)
+            return;
 
         BlockPos pos = tableBlockEntity.chestPos.get();
         Level level = tableBlockEntity.tableLevel();
 
+        ResourceHandler<ItemResource> itemHandler = level.getCapability(Capabilities.Item.BLOCK, pos, Direction.DOWN);
+        if (itemHandler == null)
+            return;
 
-        ResourceHandler<ItemResource> itemHandler = level.getCapability(Capabilities.Item.BLOCK , pos, Direction.DOWN);
-        if(itemHandler == null) return;
-
-        for(int i = 0; i < itemHandler.size(); i++) {
+        for (int i = 0; i < itemHandler.size(); i++) {
             ItemResource itemResource = itemHandler.getResource(i);
-            if(!itemResource.isEmpty()) {
-                if(itemResource.is(Items.LAPIS_LAZULI)) {
-                    
-                    Slot fuel = em.getSlot(1);
+            if (!itemResource.isEmpty()) {
+                if (itemResource.is(Items.LAPIS_LAZULI)) {
+
+                    Slot fuel = em.getSlot(0);
                     ItemStack existingStack = fuel.getItem();
 
-                    try(Transaction mainTx = Transaction.openRoot()) {
+                    try (Transaction mainTx = Transaction.openRoot()) {
 
-                        try(Transaction subTx = Transaction.open(mainTx)) {
+                        try (Transaction subTx = Transaction.open(mainTx)) {
 
                             long extracted = itemHandler.extract(i, itemResource, 64, subTx);
 
-                            if(extracted > 0) {
-                                long remain = extracted;
+                            if (extracted > 0) {
 
                                 int currentCount = existingStack.getCount();
                                 int maxStackSize = existingStack.getMaxStackSize();
                                 int roomLeft = maxStackSize - currentCount; // 슬롯에 남은 빈 공간
-            
-                                 // 실제 들어갈 수 있는 양 결정 (꺼낸 양과 빈 공간 중 작은 값)
+
+                                // 실제 들어갈 수 있는 양 결정 (꺼낸 양과 빈 공간 중 작은 값)
                                 long fillAmount = Math.min(extracted, roomLeft);
-            
+
                                 if (fillAmount > 0) {
-                                 // 3. 들어갈 수 있는 만큼만 메뉴 슬롯에 추가합니다.
+                                    // 3. 들어갈 수 있는 만큼만 메뉴 슬롯에 추가합니다.
                                     if (existingStack.isEmpty()) {
                                         fuel.set(new ItemStack(Items.LAPIS_LAZULI, (int) fillAmount));
-                                    } 
-                                    else {
+                                    } else {
                                         existingStack.grow((int) fillAmount);
                                     }
-                
+
                                     // 4. 시뮬레이션은 커밋하지 않고 그대로 닫습니다. (메인에서 필요한 만큼만 뺄 것이므로)
                                     // simTx.commit(); 을 호출하지 않으면 상자에서 꺼냈던 64개는 가상세계에서 다시 롤백됩니다.
-                                }
-            
+
                                     // 5. 이제 메인 트랜잭션에서 "실제로 들어간 양(fillAmount)"만 최종 추출합니다.
-                                    itemHandler.inser(i,itemResource, fillAmount, mainTx);
-            
-                                    // 6. 메인 트랜잭션을 최종 확정(Commit)합니다. 
-                                    mainTx.commit(); 
+                                    itemHandler.extract(i, itemResource, (int) fillAmount, mainTx);
+
+                                    // 6. 메인 트랜잭션을 최종 확정(Commit)합니다.
+                                    mainTx.commit();
                                     fuel.setChanged();
-        }
-    }
-}
-                                
+
+                                    break;
+                                }
                             }
                         }
                     }
+
                 }
             }
+
         }
     }
 
+    // 책가져오기
+    public static void bringBook(TableBlockEntity tableBlockEntity, EnchantMenu em) {
+        if (tableBlockEntity.chestPos.isEmpty() || tableBlockEntity.tableLevel() == null)
+            return;
 
-    //책가져오기
-    public static ItemStack bringBook(TableBlockEntity tableBlockEntity) {
-        if (tableBlockEntity.chestPos.isEmpty() || tableBlockEntity.tableLevel() == null) return;
+        BlockPos pos = tableBlockEntity.chestPos.get();
+        Level level = tableBlockEntity.tableLevel();
+
+        ResourceHandler<ItemResource> itemHandler = level.getCapability(Capabilities.Item.BLOCK, pos, Direction.DOWN);
+        if (itemHandler == null)
+            return;
+
+        for (int i = 0; i < itemHandler.size(); i++) {
+            ItemResource itemResource = itemHandler.getResource(i);
+            if (!itemResource.isEmpty()) {
+                if (itemResource.is(Items.LAPIS_LAZULI)) {
+
+                    Slot fuel = em.getSlot(0);
+                    ItemStack existingStack = fuel.getItem();
+
+                    try (Transaction mainTx = Transaction.openRoot()) {
+
+                        try (Transaction subTx = Transaction.open(mainTx)) {
+
+                            long extracted = itemHandler.extract(i, itemResource, 64, subTx);
+
+                            if (extracted > 0) {
+
+                                int currentCount = existingStack.getCount();
+                                int maxStackSize = existingStack.getMaxStackSize();
+                                int roomLeft = maxStackSize - currentCount; // 슬롯에 남은 빈 공간
+
+                                // 실제 들어갈 수 있는 양 결정 (꺼낸 양과 빈 공간 중 작은 값)
+                                long fillAmount = Math.min(extracted, roomLeft);
+
+                                if (fillAmount > 0) {
+                                    // 3. 들어갈 수 있는 만큼만 메뉴 슬롯에 추가합니다.
+                                    if (existingStack.isEmpty()) {
+                                        fuel.set(new ItemStack(Items.BOOK, (int) fillAmount));
+                                    } else {
+                                        existingStack.grow((int) fillAmount);
+                                    }
+
+                                    // 4. 시뮬레이션은 커밋하지 않고 그대로 닫습니다. (메인에서 필요한 만큼만 뺄 것이므로)
+                                    // simTx.commit(); 을 호출하지 않으면 상자에서 꺼냈던 64개는 가상세계에서 다시 롤백됩니다.
+
+                                    // 5. 이제 메인 트랜잭션에서 "실제로 들어간 양(fillAmount)"만 최종 추출합니다.
+                                    itemHandler.extract(i, itemResource, (int) fillAmount, mainTx);
+
+                                    // 6. 메인 트랜잭션을 최종 확정(Commit)합니다.
+                                    mainTx.commit();
+                                    fuel.setChanged();
+
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                }
+            }
+
+        }
     }
 }

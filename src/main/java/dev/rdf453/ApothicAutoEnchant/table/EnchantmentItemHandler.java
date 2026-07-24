@@ -34,7 +34,7 @@ public class EnchantmentItemHandler implements ResourceHandler<ItemResource> {
         int getCapacity(int slot, ItemResource resource);
     }
 
-    // 테이블의 인벤토리 역할을 하는 핸들러로, 슬롯 0은 연료, 슬롯 1은 책을 담당한다.
+    // 테이블의 인벤토리 역할을 하는 핸들러로, 슬롯 1은 연료, 슬롯 0은 책을 담당한다.
     public static final AttachmentType<EnchantmentItemHandler> TYPE =
             AttachmentType.builder(EnchantmentItemHandler::new).build();
 
@@ -47,8 +47,8 @@ public class EnchantmentItemHandler implements ResourceHandler<ItemResource> {
         this(
                 2,
                 (slot, resource) -> switch (slot) {
-                    case 0 -> resource.is(Tags.Items.ENCHANTING_FUELS);
-                    case 1 -> resource.is(Tags.Items.ENCHANTABLES) || resource.is(Items.ENCHANTED_BOOK);
+                    case 0 -> resource.is(Tags.Items.ENCHANTABLES) || resource.is(Items.ENCHANTED_BOOK);
+                    case 1 -> resource.is(Tags.Items.ENCHANTING_FUELS);
                     default -> false;
                 },
                 (slot, resource) -> slot == 1 ? 1 : Math.min(64, resource.getMaxStackSize())

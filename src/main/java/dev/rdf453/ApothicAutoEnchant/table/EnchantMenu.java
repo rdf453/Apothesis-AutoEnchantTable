@@ -37,6 +37,7 @@ public class EnchantMenu extends ApothEnchantmentMenu {
         this.tablePos = pos;
         // 메뉴 오픈 시점에 위치 기반으로 BE를 해석해 NPE를 사전에 차단한다.
         this.be = resolveTableBe(inv.player, pos);
+        
     }
 
     public EnchantMenu(int id, Inventory inv, ContainerLevelAccess wPos, EnchantmentTableItemHandler teInv, BlockPos pos) {

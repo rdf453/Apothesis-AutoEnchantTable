@@ -125,8 +125,8 @@ public class TableBlockEntity extends EnchantingTableBlockEntity {
             //임시 메뉴 생성
             EnchantMenu Em = new EnchantMenu(0,fp.getInventory() , this.getBlockPos());
             fp.giveExperiencePoints((int) this.xpTank);
-            if(Em.getSlot(1).getItem().getCount()<3) AutomationUtils.bringFuel(this);
-            if(Em.getSlot(0).hasItem()) AutomationUtils.bringBook(this);
+            if(Em.getSlot(1).getItem().getCount()<3) AutomationUtils.bringFuel(this, Em);
+            if(!Em.getSlot(0).hasItem()) AutomationUtils.bringBook(this,Em);
             AutomationUtils.doTransfer(this, Em);
 
             //인첸트 진행
